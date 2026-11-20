@@ -12,6 +12,7 @@
 #include <QContextMenuEvent>
 #include <QMediaPlayer>
 #include <QTimer>
+#include <QInputDialog>
 
 #include <QAudioProbe>
 #include <QAudioBuffer>
@@ -61,6 +62,7 @@ private slots:
 
   void onAudioBufferProbed(const QAudioBuffer &buffer);
   void onLedDecayTimer();
+  void timerSpeedClicked();
 
 private:
   struct PlaylistItem
@@ -103,6 +105,7 @@ private:
   QTimer *m_marqueeTimer = nullptr;
   QAudioProbe *m_audioProbe = nullptr;
   QTimer *m_ledTimer = nullptr;
+  QAction *vuTimerAction = nullptr;
 
   QPixmap m_skin;
   QPoint m_dragOffset;
@@ -111,7 +114,9 @@ private:
   int m_page=0;
   int m_leftLevel = 0;   // 0..13 active LED count
   int m_rightLevel = 0;  // 0..13 active LED count
-  double m_leftAvg = 0.0;
+  int m_ledIntervalMs = 20; // Matches original Sleeper = 20 ms
+  double m_rawPeakL = 0.0;
+  double m_rawPeakR = 0.0;  double m_leftAvg = 0.0;
   double m_rightAvg = 0.0;
   bool m_isDragging = false;
 

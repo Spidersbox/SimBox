@@ -5,6 +5,8 @@
 #include <QStringList>
 #include <QFileDialog>
 #include <QListView>
+#include <QFileIconProvider>
+
 #if QT_VERSION < 0x060000
   #include <QDesktopWidget>
 #else
@@ -18,6 +20,15 @@
 #include "ui_editform.h"
 #include "SimboxMain.h"
 
+class EmptyIconProvider : public QFileIconProvider
+{
+  public:
+    QIcon icon(IconType) const override { return QIcon(); }
+    QIcon icon(const QFileInfo &) const override { return QIcon(); }
+};
+
+
+//-----------------------------------------------------------------------------------------
 EditForm::EditForm(QWidget *parent) :
     QWidget(parent),
     ui(new Ui::EditForm)
@@ -50,28 +61,39 @@ EditForm::EditForm(QWidget *parent) :
   connect(ui->comboBox,&QComboBox::currentTextChanged, this,&EditForm::on_driveChanged);
 
   /** setup dir tree */
-  QString mPath="/home";
+  QString mPath=QDir::homePath();
   /** Dirs */
   dirModel = new QFileSystemModel(this);
   // Set filter
   dirModel->setFilter(QDir::NoDotAndDotDot | QDir::AllDirs);
   // QFileSystemModel requires root path
-  dirModel->setRootPath(mPath);
+//  dirModel->setRootPath(mPath);
+  dirModel->setRootPath("/");
 
   // Attach the dir model to the view
   ui->treeView->setModel(dirModel);
+//  ui->treeView->setRootIndex(dirModel->index(mPath)); // <- Restricts/starts treeView at ~/
+
+  QModelIndex homeIdx = dirModel->index(mPath);
+  ui->treeView->setCurrentIndex(homeIdx);
+  ui->treeView->expand(homeIdx);
+  ui->treeView->scrollTo(homeIdx);
 
 
   /** files */
   fileModel = new QFileSystemModel(this);
+  fileModel->setIconProvider(new EmptyIconProvider()); // Removes all file icons
   // Set filter
   fileModel->setFilter(QDir::NoDotAndDotDot | QDir::Files);
   fileModel->setRootPath(mPath);
 
   // Attach the file model to the view
   ui->listView->setModel(fileModel);
+  ui->listView->setRootIndex(fileModel->index(mPath)); // <- starts listView at ~/
+  ui->listView->setStyleSheet("font-size: 10px;");
+  ui->listView->setUniformItemSizes(true);
 
-
+  ui->listWidget->setStyleSheet("font-size: 10px;");
 
   /** hide some of the columns */
   /** (have to do it after setmodel) */
@@ -82,19 +104,21 @@ EditForm::EditForm(QWidget *parent) :
   updateFilters();
 }
 
+//-----------------------------------------------------------------------------------------
 EditForm::~EditForm()
 {
     delete ui;
 }
 
-//-----------------------------------------------------------------------------------------------------------------
+//-------------------------------------------------------------------------------------------
 void EditForm::receivePlaylist(QStringList list)
 {
   playlist=list;
   ui->listWidget->clear();
   ui->listWidget->addItems(list);
 }
-//-----------------------------------------------------------------------------------------------------------------
+
+//-------------------------------------------------------------------------------------------
 void EditForm::SetSignals()
 {
   /** button signals */

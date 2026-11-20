@@ -101,7 +101,6 @@ void SimboxMain::saveSettings()
 {
   QSettings settings("SimBox", "settings");
   settings.beginGroup("MainWindow");
-  settings.setValue("size", size());
   settings.setValue("pos", pos());
   settings.endGroup();
 }
@@ -109,28 +108,19 @@ void SimboxMain::saveSettings()
 //--------------------------------------------------------------------------------------
 void SimboxMain::loadSettings()
 {
-  //default center of screen
-int x,y;
-#if QT_VERSION < 0x060000
-  #if QT_VERSION < 0x050500
-    QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);//remove GtkDialog mapped without ...
-  #endif
-  QRect desktopRect = QApplication::desktop()->availableGeometry(this);
-  QPoint center = desktopRect.center();
-  x=center.x() - width() * 0.5;
-  y=center.y() - height() * 0.5;
-#else
-  QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);//remove GtkDialog warning
-  QScreen *screen = QGuiApplication::primaryScreen();
-  QRect  screenGeometry = screen->geometry();
-  x=screenGeometry.height()/2 -225;
-  y=screenGeometry.width()/2 -400;
-#endif
-
   QSettings settings("SimBox", "settings");
   settings.beginGroup("MainWindow");
-  resize(settings.value("size", QSize(840,450)).toSize());
-  move(settings.value("pos", QPoint(x,y)).toPoint());
+
+  if (settings.contains("pos"))
+  {
+    QPoint savedPos = settings.value("pos").toPoint();
+    // Only restore if that coordinate is still on an active monitor
+    if (QGuiApplication::screenAt(savedPos + QPoint(50, 50)))
+    {
+      move(savedPos);
+    }
+  }
+
   settings.endGroup();
 }
 
@@ -164,10 +154,11 @@ void SimboxMain::createActions()
   selectAllAction = new QAction(tr("Select &All"), this);
   deselectAllAction = new QAction(tr("&Deselect All"), this);
   quitAction = new QAction(tr("E&xit"), this);
+  vuTimerAction = new QAction(tr("&Timer..."), this);
 
   playerDisplayAction = new QAction(tr("&Display"), this);
   playerDisplayAction->setCheckable(true);
-  playerDisplayAction->setChecked(true);
+  playerDisplayAction->setChecked(false);
 
   connect(playerDisplayAction, SIGNAL(toggled(bool)), this, SLOT(togglePlayerDisplay(bool)));
   connect(playButton,     SIGNAL(clicked()), this, SLOT(playClicked()));
@@ -190,6 +181,7 @@ void SimboxMain::createActions()
   vuOffAction->setCheckable(true);
   vuBarAction->setChecked(true);
 
+  connect(vuTimerAction, SIGNAL(triggered()), this, SLOT(timerSpeedClicked()));
   connect(openFileAction, SIGNAL(triggered()), this, SLOT(openFilesClicked()));
   connect(loadPlAction, SIGNAL(triggered()), this, SLOT(loadPlaylistClicked()));
   connect(clearPlAction, SIGNAL(triggered()), this, SLOT(clearPlaylistClicked()));
@@ -235,6 +227,8 @@ void SimboxMain::createMenus()
   displayMenu->addAction(vuDotAction);
   displayMenu->addAction(vuOffAction);
   displayMenu->addSeparator();
+  displayMenu->addAction(vuTimerAction);
+  displayMenu->addSeparator();
   displayMenu->addAction(quitAction);}
 
 //-----------------------------------------------------------------------------------------
@@ -245,6 +239,7 @@ void SimboxMain::createToolBars()
   controlPanel->setGeometry(85, 340, 260, 90);// (x, y, w, h)
   controlPanel->setStyleSheet("background: transparent;");
 //  controlPanel->setStyleSheet("background-color: rgba(200,200,200,50);");
+  controlPanel->setVisible(false);
 
   // 2. Time & Marquee labels (coordinates relative to controlPanel)
   Label_Elapsed = new QLabel("00:00", controlPanel);
@@ -966,6 +961,8 @@ void SimboxMain::deselectAllClicked()
 //-----------------------------------------------------------------------------------------
 void SimboxMain::togglePlayerDisplay(bool visible)
 {
+controlPanel->setVisible(visible);
+/*
   // Replace with your actual widget member names as you add them
   if (Label_Marquee) Label_Marquee->setVisible(visible);
   if (Label_Elapsed) Label_Elapsed->setVisible(visible);
@@ -975,6 +972,7 @@ void SimboxMain::togglePlayerDisplay(bool visible)
   if (stopButton)    stopButton->setVisible(visible);
   if (previousButton) previousButton->setVisible(visible);
   if (nextButton)    nextButton->setVisible(visible);
+*/
 }
 
 //-----------------------------------------------------------------------------------------
@@ -1106,8 +1104,6 @@ void SimboxMain::onAudioBufferProbed(const QAudioBuffer &buffer)
 
   int frames = buffer.frameCount();
   int channels = buffer.format().channelCount();
-  double peakL = 0.0;
-  double peakR = 0.0;
 
   if (buffer.format().sampleType() == QAudioFormat::SignedInt && buffer.format().sampleSize() == 16)
   {
@@ -1116,8 +1112,8 @@ void SimboxMain::onAudioBufferProbed(const QAudioBuffer &buffer)
     {
       double l = qAbs(static_cast<double>(data[i * channels])) / 32768.0;
       double r = qAbs(static_cast<double>(data[i * channels + 1])) / 32768.0;
-      if (l > peakL) peakL = l;
-      if (r > peakR) peakR = r;
+      if (l > m_rawPeakL) m_rawPeakL = l;
+      if (r > m_rawPeakR) m_rawPeakR = r;
     }
   }
   else if (buffer.format().sampleType() == QAudioFormat::Float)
@@ -1127,32 +1123,55 @@ void SimboxMain::onAudioBufferProbed(const QAudioBuffer &buffer)
     {
       double l = qAbs(static_cast<double>(data[i * channels]));
       double r = qAbs(static_cast<double>(data[i * channels + 1]));
-      if (l > peakL) peakL = l;
-      if (r > peakR) peakR = r;
+      if (l > m_rawPeakL) m_rawPeakL = l;
+      if (r > m_rawPeakR) m_rawPeakR = r;
     }
   }
-
-  // Apply your original weighted average smoothing from DispThreadMain.cpp
-  if (peakL < m_leftAvg)  peakL = (peakL + m_leftAvg + m_leftAvg) / 3.0;
-  if (peakR < m_rightAvg) peakR = (peakR + m_rightAvg + m_rightAvg) / 3.0;
-  m_leftAvg = peakL;
-  m_rightAvg = peakR;
-
-  m_leftLevel  = qBound(0, static_cast<int>(peakL * 14.0), 13);
-  m_rightLevel = qBound(0, static_cast<int>(peakR * 14.0), 13);
-  update(); // Trigger paintEvent
 }
 
 //-----------------------------------------------------------------------------------------
 void SimboxMain::onLedDecayTimer()
 {
-  if (m_player->state() != QMediaPlayer::PlayingState && (m_leftLevel > 0 || m_rightLevel > 0))
+  // Instant attack when a louder peak arrives; smooth controlled falloff otherwise
+  if (m_rawPeakL >= m_leftAvg)
+    m_leftAvg = m_rawPeakL;
+  else
+    m_leftAvg = (m_rawPeakL + m_leftAvg + m_leftAvg) / 3.0;
+
+  if (m_rawPeakR >= m_rightAvg)
+    m_rightAvg = m_rawPeakR;
+  else
+    m_rightAvg = (m_rawPeakR + m_rightAvg + m_rightAvg) / 3.0;
+
+  // Reset raw peak accumulator for the next timer tick
+  m_rawPeakL = 0.0;
+  m_rawPeakR = 0.0;
+
+  int newLeft  = qBound(0, static_cast<int>(m_leftAvg * 15.0), 13);
+  int newRight = qBound(0, static_cast<int>(m_rightAvg * 15.0), 13);
+
+  if (newLeft != m_leftLevel || newRight != m_rightLevel)
   {
-    m_leftAvg *= 0.7;
-    m_rightAvg *= 0.7;
-    m_leftLevel = static_cast<int>(m_leftAvg * 14.0);
-    m_rightLevel = static_cast<int>(m_rightAvg * 14.0);
+    m_leftLevel = newLeft;
+    m_rightLevel = newRight;
     update();
   }
 }
 
+//-----------------------------------------------------------------------------------------
+void SimboxMain::timerSpeedClicked()
+{
+  bool ok = false;
+  int newMs = QInputDialog::getInt(
+      this, tr("VU Meter Speed"),
+      tr("Refresh interval (ms — lower is faster):"),
+      m_ledIntervalMs, 5, 500, 5, &ok);
+
+  if (ok)
+  {
+    m_ledIntervalMs = newMs;
+    m_ledTimer->start(m_ledIntervalMs);
+  }
+}
+
+//-----------------------------------------------------------------------------------------
