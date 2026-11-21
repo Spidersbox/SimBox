@@ -26,6 +26,8 @@ class SimboxMain : public QWidget
 public:
   explicit SimboxMain(const QString &skinPath, QWidget *parent = nullptr);
   QStringList playlist;
+  inline static QString SongDir;     // dir of open file
+  inline static QString PlaylistDir; // dir of open playlist
 
 protected:
   void paintEvent(QPaintEvent *event) override;
@@ -62,6 +64,7 @@ private slots:
   void nextPageClicked();
 
   void onAudioBufferProbed(const QAudioBuffer &buffer);
+  void moreOptionsClicked();
   void onLedDecayTimer();
   void timerSpeedClicked();
 
@@ -97,6 +100,7 @@ private:
   QAction *vuDotAction;
   QAction *vuOffAction;
   QAction *vuTimerAction = nullptr;
+  QAction *moreOptionsAction;
 
   QWidget *controlPanel;
 
@@ -121,12 +125,27 @@ private:
   QPoint m_dragOffset;
   QString m_marqueeText;
 
+  // More Options settings
+  bool m_tailsDot    = true;
+  bool m_tailsBar    = false;
+  bool m_peakHoldDot = false;
+  bool m_peakHoldBar = false;
+  bool m_loopEnabled = true;
+  bool m_randomLoop  = false;
+
+  // Peak-hold tracking (0.0 .. 13.0 LED index + hold countdown ticks)
+  double m_peakHoldL = 0.0;
+  double m_peakHoldR = 0.0;
+  int m_peakPauseL   = 0;
+  int m_peakPauseR   = 0;
+
   int m_ledSyncDelayMs = 0;
   int m_currentSong = -1;
   int m_page=0;
   int m_leftLevel = 0;   // 0..13 active LED count
   int m_rightLevel = 0;  // 0..13 active LED count
   int m_ledIntervalMs = 20; // Matches original Sleeper = 20 ms
+
   double m_rawPeakL = 0.0;
   double m_rawPeakR = 0.0;  double m_leftAvg = 0.0;
   double m_rightAvg = 0.0;
@@ -162,6 +181,8 @@ private:
   void setupPageButtons();
   void setupLeds();
   void loadSettings();
+  void randomizePlaylist();
+  void playNextTrack(bool autoAdvance);
 
 };
 

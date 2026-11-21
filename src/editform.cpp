@@ -255,9 +255,15 @@ void EditForm::bt_save_clicked()
   for(int i=0;i<ui->listWidget->count(); i++)
     playlist << ui->listWidget->item(i)->text();
 
-  QString filename = QFileDialog::getSaveFileName(this, tr("save as"), "/", tr("playlist files(*.m3u)"));
-  if (filename.isEmpty())
-    return;
+  QString startDir = SimboxMain::PlaylistDir.isEmpty() ? QDir::homePath() : SimboxMain::PlaylistDir;
+
+  QString filename = QFileDialog::getSaveFileName(
+      this,
+      tr("save as"),
+      startDir,
+      tr("playlist files(*.m3u)")
+  );
+
 
   // check for extension
   // windows will add the extension
@@ -270,6 +276,8 @@ void EditForm::bt_save_clicked()
   //Open the file
   if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
     return;
+
+  SimboxMain::PlaylistDir = QFileInfo(filename).absolutePath();
 
   QTextStream out(&file);
   for(int i=0;i<playlist.size();++i)

@@ -13,13 +13,16 @@ UI_DIR = build
 SOURCES += \
     src/Simbox.cpp \
     src/editform.cpp \
+    src/optionsform.cpp \
     src/SimboxMain.cpp
 
 HEADERS += \
     src/editform.h \
+    src/optionsform.h \
     src/SimboxMain.h
 
 FORMS += \
+    src/forms/optionsform.ui \
     src/forms/editform.ui
 
 RC_FILE = src/Simbox.rc

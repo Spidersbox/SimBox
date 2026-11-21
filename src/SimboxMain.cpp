@@ -1,5 +1,6 @@
 #include <QMenu>
 #include <QApplication>
+#include <QCoreApplication>
 #include <QFile>
 #include <QDialog>
 #include <QMessageBox>
@@ -7,15 +8,16 @@
 #include <QFileInfo>
 #include <QFileDialog>
 #include <QSignalBlocker>
+#include <QDir>
 #include <QPainter>
 #include <QImage>
 #include <QIcon>
 #include <QBitmap>
 #include <QSet>
 #include <QSettings>
+#include <algorithm>
+#include <QRandomGenerator>
 
-//#include <QtGui/QApplication>  //qt4
-#include <QApplication>  //qt5
 #if QT_VERSION < 0x060000
   #include <QDesktopWidget>
 #else
@@ -25,6 +27,7 @@
 #include <QDebug>
 
 
+#include "optionsform.h"
 #include "editform.h"
 #include "SimboxMain.h"
 
@@ -85,11 +88,33 @@ SimboxMain::SimboxMain(const QString &skinPath, QWidget *parent)
   setupSongSlots();
   setupPageButtons();
 
-// load settings from ini file
+  // load settings from ini file
   loadSettings();
 
+  QStringList args = QCoreApplication::arguments();
+  if (args.size() > 1)
+  {
+    QFileInfo fi(args[1].trimmed());
+    QString ext = fi.suffix().toLower();
+    if (fi.exists() && (ext == "m3u" || ext == "sel"))
+    {
+      loadPlaylist(fi.absoluteFilePath()); // Your existing .m3u + .sel loader
+      m_page = 0;
+      updateLabels();
 
-updateLabels();
+      // Find the first selected track and start playing
+      for (int i = 0; i < m_playlist.size(); ++i)
+      {
+        if (m_playlist[i].selected)
+        {
+          startPlayer(i);
+          break;
+        }
+      }
+    }
+  }
+
+  updateLabels();
 
 }
 
@@ -98,7 +123,28 @@ void SimboxMain::saveSettings()
 {
   QSettings settings("SimBox", "settings");
   settings.beginGroup("MainWindow");
-  settings.setValue("pos", pos());
+
+  if (settings.contains("pos"))
+  {
+    QPoint savedPos = settings.value("pos").toPoint();
+    if (QGuiApplication::screenAt(savedPos + QPoint(50, 50)))
+    {
+      move(savedPos);
+    }
+  }
+
+  PlaylistDir = settings.value("Playlist Dir", QDir::homePath()).toString();
+  SongDir     = settings.value("Song Dir", QDir::homePath()).toString();
+  settings.endGroup();
+
+  settings.beginGroup("VU Display");
+  settings.setValue("tailsDot",      m_tailsDot);
+  settings.setValue("tailsBar",      m_tailsBar);
+  settings.setValue("peakHoldDot",   m_peakHoldDot);
+  settings.setValue("peakHoldBar",   m_peakHoldBar);
+  settings.setValue("loopEnabled",   m_loopEnabled);
+  settings.setValue("randomLoop",    m_randomLoop);
+  settings.setValue("ledIntervalMs", m_ledIntervalMs);
   settings.endGroup();
 }
 
@@ -118,6 +164,26 @@ void SimboxMain::loadSettings()
     }
   }
 
+  if (settings.contains("Playlist Dir"))
+  {
+    PlaylistDir = settings.value("Playlist Dir").toString();
+  }
+
+  if (settings.contains("Song Dir"))
+  {
+    SongDir = settings.value("Song Dir").toString();
+  }
+  settings.endGroup();
+
+  settings.beginGroup("VU Display");
+  m_tailsDot      = settings.value("tailsDot", true).toBool();
+  m_tailsBar      = settings.value("tailsBar", false).toBool();
+  m_peakHoldDot   = settings.value("peakHoldDot", false).toBool();
+  m_peakHoldBar   = settings.value("peakHoldBar", false).toBool();
+  m_loopEnabled   = settings.value("loopEnabled", true).toBool();
+  m_randomLoop    = settings.value("randomLoop", false).toBool();
+  m_ledIntervalMs = settings.value("ledIntervalMs", 20).toInt();
+  if (m_ledTimer) m_ledTimer->start(m_ledIntervalMs);
   settings.endGroup();
 }
 
@@ -133,6 +199,10 @@ bool SimboxMain::eventFilter(QObject *obj, QEvent *event)
       if (offset < m_playlist.size())
       {
         startPlayer(offset);
+      }
+      else
+      {
+        openFilesClicked(); // Double-click a blank card to add tracks
       }
       return true;
     }
@@ -152,6 +222,7 @@ void SimboxMain::createActions()
   deselectAllAction = new QAction(tr("&Deselect All"), this);
   quitAction = new QAction(tr("E&xit"), this);
   vuTimerAction = new QAction(tr("&Timer..."), this);
+  moreOptionsAction = new QAction(tr("&More Options..."), this);
 
   playerDisplayAction = new QAction(tr("&Display"), this);
   playerDisplayAction->setCheckable(true);
@@ -186,6 +257,7 @@ void SimboxMain::createActions()
   connect(editPlAction, SIGNAL(triggered()), this, SLOT(editPlaylistClicked()));
   connect(selectAllAction, SIGNAL(triggered()), this, SLOT(selectAllClicked()));
   connect(deselectAllAction, SIGNAL(triggered()), this, SLOT(deselectAllClicked()));
+  connect(moreOptionsAction, SIGNAL(triggered()), this, SLOT(moreOptionsClicked()));
   connect(quitAction, SIGNAL(triggered()), qApp, SLOT(quit()));
   connect(qApp, SIGNAL(aboutToQuit()), this, SLOT(saveSettings()));
 }
@@ -226,7 +298,8 @@ void SimboxMain::createMenus()
   displayMenu->addSeparator();
   displayMenu->addAction(vuTimerAction);
   displayMenu->addSeparator();
-  displayMenu->addAction(quitAction);}
+  displayMenu->addAction(moreOptionsAction);
+}
 
 //-----------------------------------------------------------------------------------------
 void SimboxMain::createToolBars()
@@ -684,17 +757,53 @@ void SimboxMain::nextPageClicked()
 //-----------------------------------------------------------------------------------------
 void SimboxMain::openFilesClicked()
 {
+  QString startDir = SongDir.isEmpty() ? QDir::homePath() : SongDir;
 
+  QStringList files = QFileDialog::getOpenFileNames(
+      this,
+      tr("Open Audio Files"),
+      startDir,
+      tr("Audio Files (*.mp3 *.wav *.mid *.midi);;All Files (*)")
+  );
+
+  if (files.isEmpty()) return;
+
+  // Remember the folder for next time
+  SongDir = QFileInfo(files.first()).absolutePath();
+
+  bool wasEmpty = m_playlist.isEmpty();
+
+  for (const QString &filePath : files)
+  {
+    m_playlist.append({filePath, true}); // Selected by default so they play right away
+  }
+
+  updateLabels();
+
+  // If the jukebox was empty when you added files, jump to page 0 and start playing
+  if (wasEmpty && !m_playlist.isEmpty())
+  {
+    m_page = 0;
+    updateLabels();
+//    startPlayer(0);
+  }
 }
 
 //-----------------------------------------------------------------------------------------
 void SimboxMain::loadPlaylistClicked()
 {
- QString filename = QFileDialog::getOpenFileName(
-              this, "Open Playlist", qApp->applicationDirPath(),
-              "Playlist files (*.m3u)");
+  QString startDir = PlaylistDir.isEmpty() ? QDir::homePath() : PlaylistDir;
+  QString filename = QFileDialog::getOpenFileName(
+              this,
+              tr("Open Playlist"),
+              startDir, //  qApp->applicationDirPath()
+              tr("Playlist files (*.m3u)")
+  );
 
   if (filename.isEmpty()) return; // User clicked Cancel
+
+//  PlaylistDir = QFileInfo(filename.first()).absolutePath();
+  PlaylistDir=filename;
 
   QFile file(filename);
   if (file.open(QIODevice::ReadOnly | QIODevice::Text))
@@ -756,11 +865,15 @@ void SimboxMain::clearPlaylistClicked()
 //-----------------------------------------------------------------------------------------
 void SimboxMain::savePlaylistClicked()
 {
+  QString startDir = PlaylistDir.isEmpty() ? QDir::homePath() : PlaylistDir;
   QString filename = QFileDialog::getSaveFileName(
               this, "Save Playlist", qApp->applicationDirPath(),
               "Playlist files (*.m3u)");
 
   if (filename.isEmpty()) return;
+
+//  PlaylistDir = QFileInfo(filename).absolutePath();
+  PlaylistDir=filename;
 
   if (!filename.endsWith(".m3u", Qt::CaseInsensitive))
   {
@@ -883,7 +996,6 @@ void SimboxMain::startPlayer(int index)
 
   QString path = m_playlist[m_currentSong].filePath;
   QFileInfo info(path);
-qDebug() << "Double-clicked slot:" << index << "path:" << path;
 
   // Set up scrolling marquee text with padding spaces (just like original SongDisplay)
   m_marqueeText = "    " + info.completeBaseName() + "    ";
@@ -960,8 +1072,50 @@ void SimboxMain::onMediaStatusChanged(QMediaPlayer::MediaStatus status)
   // Auto-advance when song finishes or hits an unreadable file
   if (status == QMediaPlayer::EndOfMedia || status == QMediaPlayer::InvalidMedia)
   {
-    nextClicked();
+    playNextTrack(true);
   }
+}
+
+//-----------------------------------------------------------------------------------------
+void SimboxMain::playNextTrack(bool autoAdvance)
+{
+  if (m_playlist.isEmpty()) return;
+
+  // 1. Look for the next selected track after m_currentSong
+  for (int i = m_currentSong + 1; i < m_playlist.size(); ++i)
+  {
+    if (m_playlist[i].selected)
+    {
+      startPlayer(i);
+      return;
+    }
+  }
+
+  // 2. Reached the end of the playlist
+  if (autoAdvance && !m_loopEnabled)
+  {
+    stopClicked();
+    return;
+  }
+
+  // Shuffle before starting the next pass if Randomize Loop is checked
+  if (autoAdvance && m_loopEnabled && m_randomLoop)
+  {
+    randomizePlaylist();
+  }
+
+  // Wrap around to the first selected track from index 0
+  for (int i = 0; i < m_playlist.size(); ++i)
+  {
+    if (m_playlist[i].selected)
+    {
+      startPlayer(i);
+      return;
+    }
+  }
+
+  // No tracks are selected at all
+  stopClicked();
 }
 
 //-----------------------------------------------------------------------------------------
@@ -1028,6 +1182,25 @@ void SimboxMain::paintEvent(QPaintEvent * /*event*/)
 
       drawChannel(m_leftLedCoords, m_leftLedAlpha);
       drawChannel(m_rightLedCoords, m_rightLedAlpha);
+
+      bool dotOnly = (vuDotAction && vuDotAction->isChecked());
+      bool showPeak = dotOnly ? m_peakHoldDot : m_peakHoldBar;
+      if (showPeak)
+      {
+        auto drawPeak = [&](const QVector<QPoint> &coords, double peakPos)
+        {
+          int idx = static_cast<int>(peakPos) - 1;
+          if (idx >= 0 && idx < 13)
+          {
+            painter.setPen(QPen(Qt::black, 1));
+            painter.setBrush(QColor(0, 230, 255)); // Crisp cyan peak-hold marker
+            painter.drawRoundedRect(coords[idx].x() - 2, coords[idx].y() - 4, 5, 9, 2, 2);
+          }
+        };
+
+        drawPeak(m_leftLedCoords, m_peakHoldL);
+        drawPeak(m_rightLedCoords, m_peakHoldR);
+      }
     }
   }
   else
@@ -1104,37 +1277,38 @@ void SimboxMain::onAudioBufferProbed(const QAudioBuffer &buffer)
 //-----------------------------------------------------------------------------------------
 void SimboxMain::onLedDecayTimer()
 {
-  // 1. If paused or stopped, fade out smoothly just like your simple timer
+  // 1. If paused or stopped, fade everything out smoothly
   if (m_player->state() != QMediaPlayer::PlayingState)
   {
-    if (m_leftLevel > 0 || m_rightLevel > 0)
+    bool stillFading = false;
+    for (int i = 0; i < 13; ++i)
     {
-      m_leftAvg *= 0.7;
+      m_leftLedAlpha[i]  *= 0.7;
+      m_rightLedAlpha[i] *= 0.7;
+      if (m_leftLedAlpha[i]  < 0.03) m_leftLedAlpha[i]  = 0.0;
+      if (m_rightLedAlpha[i] < 0.03) m_rightLedAlpha[i] = 0.0;
+      if (m_leftLedAlpha[i] > 0.0 || m_rightLedAlpha[i] > 0.0) stillFading = true;
+    }
+
+    if (m_leftLevel > 0 || m_rightLevel > 0 || m_peakHoldL > 0.0 || m_peakHoldR > 0.0 || stillFading)
+    {
+      m_leftAvg  *= 0.7;
       m_rightAvg *= 0.7;
-      m_leftLevel = static_cast<int>(m_leftAvg * 14.0);
+      m_leftLevel  = static_cast<int>(m_leftAvg * 14.0);
       m_rightLevel = static_cast<int>(m_rightAvg * 14.0);
+      m_peakHoldL  = qMax(0.0, m_peakHoldL - 0.5);
+      m_peakHoldR  = qMax(0.0, m_peakHoldR - 0.5);
       update();
     }
     return;
   }
 
-  // Drop stale packets from a previous song or backward seek
-  qint64 currentPlayPos = m_player->position();
-  while (!m_peakQueue.isEmpty() &&
-         m_peakQueue.head().timestampMs > currentPlayPos + 1000)
-  {
-    m_peakQueue.dequeue();
-  }
-
-  // 2. Pop any queued audio peaks whose playback timestamp has reached the speakers
-  currentPlayPos = m_player->position();
+  // 2. Grab the latest peak (direct on Linux, timestamp-delayed on Windows)
   double targetL = 0.0;
   double targetR = 0.0;
   bool hasPeak = false;
-  bool dotOnly = (vuDotAction && vuDotAction->isChecked());
-  bool anyLit = false;
 
- if (m_ledSyncDelayMs <= 0)
+  if (m_ledSyncDelayMs <= 0)
   {
     if (m_rawPeakL > 0.0 || m_rawPeakR > 0.0)
     {
@@ -1149,6 +1323,11 @@ void SimboxMain::onLedDecayTimer()
   {
     qint64 currentPlayPos = m_player->position();
     while (!m_peakQueue.isEmpty() &&
+           m_peakQueue.head().timestampMs > currentPlayPos + 1000)
+    {
+      m_peakQueue.dequeue();
+    }
+    while (!m_peakQueue.isEmpty() &&
            (m_peakQueue.head().timestampMs + m_ledSyncDelayMs) <= currentPlayPos)
     {
       TimedPeak p = m_peakQueue.dequeue();
@@ -1158,16 +1337,10 @@ void SimboxMain::onLedDecayTimer()
     }
   }
 
-  while (!m_peakQueue.isEmpty() &&
-         (m_peakQueue.head().timestampMs + m_ledSyncDelayMs) <= currentPlayPos)
-  {
-    TimedPeak p = m_peakQueue.dequeue();
-    if (p.left > targetL)  targetL = p.left;
-    if (p.right > targetR) targetR = p.right;
-    hasPeak = true;
-  }
+  bool dotOnly = (vuDotAction && vuDotAction->isChecked());
+  bool tailsOn = dotOnly ? m_tailsDot : m_tailsBar;
 
-  // 3. Smooth attack/decay (holds steady between audio chunks instead of dropping to 0)
+  // 3. Smooth attack/decay (snaps down faster when Tails is unchecked)
   if (hasPeak)
   {
     m_leftAvg  = (targetL >= m_leftAvg)  ? targetL : (targetL + m_leftAvg + m_leftAvg) / 3.0;
@@ -1175,31 +1348,65 @@ void SimboxMain::onLedDecayTimer()
   }
   else
   {
-    m_leftAvg  *= 0.90;
-    m_rightAvg *= 0.90;
+    double avgFalloff = tailsOn ? 0.90 : 0.65;
+    m_leftAvg  *= avgFalloff;
+    m_rightAvg *= avgFalloff;
   }
 
   int newLeft  = qBound(0, static_cast<int>(m_leftAvg * 14.0), 13);
   int newRight = qBound(0, static_cast<int>(m_rightAvg * 14.0), 13);
 
+  // 4. Update phosphor trails using activeFade (0.0 when Tails is unchecked!)
+  double activeFade = tailsOn ? 0.82 : 0.0;
+  bool anyLit = false;
+
   for (int i = 0; i < 13; ++i)
   {
-    bool isLitL = dotOnly ? (i == m_leftLevel - 1 && m_leftLevel > 0)   : (i < m_leftLevel);
-    bool isLitR = dotOnly ? (i == m_rightLevel - 1 && m_rightLevel > 0) : (i < m_rightLevel);
+    bool isLitL = dotOnly ? (i == newLeft - 1 && newLeft > 0)   : (i < newLeft);
+    bool isLitR = dotOnly ? (i == newRight - 1 && newRight > 0) : (i < newRight);
 
-    m_leftLedAlpha[i]  = isLitL ? 1.0 : (m_leftLedAlpha[i]  * m_ledFadeFactor);
-    m_rightLedAlpha[i] = isLitR ? 1.0 : (m_rightLedAlpha[i] * m_ledFadeFactor);
+    m_leftLedAlpha[i]  = isLitL ? 1.0 : (m_leftLedAlpha[i]  * activeFade);
+    m_rightLedAlpha[i] = isLitR ? 1.0 : (m_rightLedAlpha[i] * activeFade);
 
-    // Clamp tiny residual values to 0 so repaints stop once fully faded
     if (m_leftLedAlpha[i]  < 0.03) m_leftLedAlpha[i]  = 0.0;
     if (m_rightLedAlpha[i] < 0.03) m_rightLedAlpha[i] = 0.0;
 
     if (m_leftLedAlpha[i] > 0.0 || m_rightLedAlpha[i] > 0.0) anyLit = true;
   }
 
-  if (anyLit || newLeft != m_leftLevel || newRight != m_rightLevel)
+  // 5. Update Peak-Hold markers
+  if (newLeft >= m_peakHoldL)
   {
-    m_leftLevel = newLeft;
+    m_peakHoldL  = newLeft;
+    m_peakPauseL = 12;
+  }
+  else if (m_peakPauseL > 0)
+  {
+    --m_peakPauseL;
+  }
+  else
+  {
+    m_peakHoldL = qMax(0.0, m_peakHoldL - 0.25);
+  }
+
+  if (newRight >= m_peakHoldR)
+  {
+    m_peakHoldR  = newRight;
+    m_peakPauseR = 12;
+  }
+  else if (m_peakPauseR > 0)
+  {
+    --m_peakPauseR;
+  }
+  else
+  {
+    m_peakHoldR = qMax(0.0, m_peakHoldR - 0.25);
+  }
+
+  if (anyLit || m_peakHoldL > 0.0 || m_peakHoldR > 0.0 ||
+      newLeft != m_leftLevel || newRight != m_rightLevel)
+  {
+    m_leftLevel  = newLeft;
     m_rightLevel = newRight;
     update();
   }
@@ -1222,3 +1429,49 @@ void SimboxMain::timerSpeedClicked()
 }
 
 //-----------------------------------------------------------------------------------------
+void SimboxMain::randomizePlaylist()
+{
+  if (m_playlist.size() > 1)
+  {
+    std::shuffle(m_playlist.begin(), m_playlist.end(), *QRandomGenerator::global());
+  }
+  m_page = 0;
+  updateLabels();
+}
+
+//-----------------------------------------------------------------------------------------
+void SimboxMain::moreOptionsClicked()
+{
+  OptionsForm dlg(this);
+  dlg.setValues(m_tailsDot, m_tailsBar, m_peakHoldDot, m_peakHoldBar,
+                m_loopEnabled, m_randomLoop, m_ledIntervalMs);
+
+  connect(&dlg, &OptionsForm::randomizeNowRequested, this, [this]() {
+    stopClicked();
+    randomizePlaylist();
+    for (int i = 0; i < m_playlist.size(); ++i)
+    {
+      if (m_playlist[i].selected) { startPlayer(i); break; }
+    }
+  });
+
+  if (dlg.exec() == QDialog::Accepted)
+  {
+    m_tailsDot    = dlg.tailsDot();
+    m_tailsBar    = dlg.tailsBar();
+    m_peakHoldDot = dlg.peakDot();
+    m_peakHoldBar = dlg.peakBar();
+    m_loopEnabled = dlg.loopEnabled();
+    m_randomLoop  = dlg.randomLoop();
+
+    if (m_ledIntervalMs != dlg.ledIntervalMs())
+    {
+      m_ledIntervalMs = dlg.ledIntervalMs();
+      m_ledTimer->start(m_ledIntervalMs);
+    }
+    update();
+  }
+}
+
+//-----------------------------------------------------------------------------------------
+
