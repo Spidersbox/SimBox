@@ -870,7 +870,7 @@ controlPanel->setVisible(visible);
 //-----------------------------------------------------------------------------------------
 void SimboxMain::startPlayer(int index)
 {
-  m_player->stop();
+//  m_player->stop();
   m_peakQueue.clear();
   m_rawPeakL = 0.0;
   m_rawPeakR = 0.0;
@@ -1091,8 +1091,7 @@ void SimboxMain::onAudioBufferProbed(const QAudioBuffer &buffer)
   }
   else
   {
-    // Windows: delay peaks by m_ledSyncDelayMs to match hardware audio buffer
-    qint64 bufMs = m_player->position();
+    qint64 bufMs = (buffer.startTime() >= 0) ? (buffer.startTime() / 1000) : 0;
     // Ignore stale position readings from the previous track during a track switch
     if (!m_peakQueue.isEmpty() && bufMs + 1000 < m_peakQueue.last().timestampMs)
     {
