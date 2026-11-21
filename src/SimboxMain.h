@@ -16,6 +16,7 @@
 
 #include <QAudioProbe>
 #include <QAudioBuffer>
+#include <QQueue>
 #include <QVector>
 
 class SimboxMain : public QWidget
@@ -71,6 +72,14 @@ private:
     bool selected = true; // Replaces song[i]
   };
 
+  struct TimedPeak
+  {
+    qint64 timestampMs;
+    double left;
+    double right;
+  };
+
+
   QMenu *mainMenu;
   QMenu *playControlMenu;
   QMenu *displayMenu;
@@ -87,6 +96,7 @@ private:
   QAction *vuBarAction;
   QAction *vuDotAction;
   QAction *vuOffAction;
+  QAction *vuTimerAction = nullptr;
 
   QWidget *controlPanel;
 
@@ -105,11 +115,13 @@ private:
   QTimer *m_marqueeTimer = nullptr;
   QAudioProbe *m_audioProbe = nullptr;
   QTimer *m_ledTimer = nullptr;
-  QAction *vuTimerAction = nullptr;
 
+  QQueue<TimedPeak> m_peakQueue;
   QPixmap m_skin;
   QPoint m_dragOffset;
   QString m_marqueeText;
+
+  int m_ledSyncDelayMs = 0;
   int m_currentSong = -1;
   int m_page=0;
   int m_leftLevel = 0;   // 0..13 active LED count
@@ -118,6 +130,9 @@ private:
   double m_rawPeakL = 0.0;
   double m_rawPeakR = 0.0;  double m_leftAvg = 0.0;
   double m_rightAvg = 0.0;
+  double m_leftLedAlpha[13]  = {0.0};
+  double m_rightLedAlpha[13] = {0.0};
+  double m_ledFadeFactor     =  0.82; // 0.0 = instant off, 0.82 = smooth trail, 0.92 = long tail
   bool m_isDragging = false;
 
   QVector<PlaylistItem> m_playlist; // Grows dynamically to any size
@@ -142,7 +157,6 @@ private:
   void updateSlotLabelStyle(int slotIndex, bool selected);
   void updateLabels();
   void contextMenuEvent(QContextMenuEvent *event);
-  void showMainMenu(const QPoint &globalPos);
   void savePlaylist(const QString &m3uPath);
   void startPlayer(int index);
   void setupPageButtons();

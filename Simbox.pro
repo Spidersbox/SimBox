@@ -6,6 +6,10 @@ greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
 CONFIG += c++17
 
+win32 {
+  LIBS += -lole32 -luuid
+}
+
 OBJECTS_DIR = build
 MOC_DIR = build
 UI_DIR = build

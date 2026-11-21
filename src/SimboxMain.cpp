@@ -25,6 +25,7 @@
 #include <QDebug>
 
 
+#include "WinAudioLatency.h"
 #include "editform.h"
 #include "SimboxMain.h"
 
@@ -68,9 +69,6 @@ SimboxMain::SimboxMain(const QString &skinPath, QWidget *parent)
     setUnifiedTitleAndToolBarOnMac(true);
     QApplication::setAttribute(Qt::AA_DontShowIconsInMenus);
 #endif
-
-
-
 
 
   m_selected.resize(20);
@@ -284,50 +282,6 @@ void SimboxMain::createToolBars()
 }
 
 //-----------------------------------------------------------------------------------------
-void SimboxMain::paintEvent(QPaintEvent * /*event*/)
-{
-  QPainter painter(this);
-  painter.setRenderHint(QPainter::Antialiasing);
-
-  if (!m_skin.isNull())
-  {
-    painter.drawPixmap(0, 0, m_skin);
-    if (vuOffAction && !vuOffAction->isChecked() && m_leftLedCoords.size() == 13)
-    {
-      bool dotOnly = (vuDotAction && vuDotAction->isChecked());
-
-      auto drawChannel = [&](const QVector<QPoint> &coords, int level)
-      {
-        for (int i = 0; i < 13; ++i)
-        {
-          bool lit = dotOnly ? (i == level - 1 && level > 0) : (i < level);
-          if (!lit) continue;
-
-          QColor ledColor = (i < 4)  ? QColor(0, 255, 0) :     // Green (1-9)
-                            (i < 10) ? QColor(255, 255, 0) :   // Yellow (10-11)
-                                       QColor(255, 40, 40);    // Red peak (12-13)
-
-          painter.setPen(Qt::NoPen);
-          painter.setBrush(ledColor);
-          //painter.drawEllipse(coords[i], 3, 3); // 6x6px glowing LED dot
-          painter.drawRoundedRect(coords[i].x() - 2, coords[i].y() - 4, 5, 9, 2, 2);
-        }
-      };
-
-      drawChannel(m_leftLedCoords, m_leftLevel);
-      drawChannel(m_rightLedCoords, m_rightLevel);
-    }
-  }
-  else
-  {
-    // Fallback placeholder shape if skin PNG hasn't been added yet
-    painter.setBrush(QColor(40, 20, 20, 230));
-    painter.setPen(Qt::NoPen);
-    painter.drawRoundedRect(rect(), 40, 40);
-  }
-}
-
-//-----------------------------------------------------------------------------------------
 void SimboxMain::setupSongSlots()
 {
   // Exact Y-coordinates from your original BCB3 SimBoxMain.cpp
@@ -342,16 +296,6 @@ void SimboxMain::setupSongSlots()
     btn->setGeometry(x, y, 109, 14);
     btn->setCursor(Qt::PointingHandCursor);
     btn->setText(QString("Track %1").arg(i + 1));
-
-// Tag each card with its 0..19 slot index and route double-clicks to eventFilter
-    btn->setProperty("slotIndex", i);
-    btn->installEventFilter(this);
-
-//    // Capture slot index cleanly with a C++11 lambda
-//    connect(btn, &QPushButton::clicked, this, [this, i]()
-//    {
-//      onSongSlotClicked(i);
-//    });
 
     m_songSlots.append(btn);
     updateSlotStyle(i);
@@ -418,83 +362,6 @@ void SimboxMain::mousePressEvent(QMouseEvent *event)
     m_dragOffset = event->globalPos() - frameGeometry().topLeft();
     setCursor(Qt::ClosedHandCursor);
   }
-}
-
-//-----------------------------------------------------------------------------------------
-/*
-void SimboxMain::contextMenuEvent(QContextMenuEvent *event)
-{
-  showMainMenu(event->globalPos());
-}
-*/
-
-//-----------------------------------------------------------------------------------------
-void SimboxMain::showMainMenu(const QPoint &globalPos)
-{
-/*
-  QMenu menu(this);
-
-  // 1. Open File (multi-select audio files)
-  menu.addAction("Open File", this, [this]() {
-    QStringList files = QFileDialog::getOpenFileNames(
-        this, "Open Audio Files", QString(),
-        "Audio Files (*.mp3 *.wav *.mid *.ogg);;All Files (*)");
-    if (!files.isEmpty()) {
-      for (const QString &f : files) {
-        m_playlist.append({f, true});
-      }
-      updateLabels();
-    }
-  });
-
-  // 2. Play List submenu
-  QMenu *plMenu = menu.addMenu("Play List");
-
-  plMenu->addAction("Load", this, [this]() {
-    QString file = QFileDialog::getOpenFileName(
-        this, "Load Playlist", QString(), "Playlists (*.m3u);;All Files (*)");
-    if (!file.isEmpty()) {
-      loadPlaylist(file);
-      updateLabels();
-    }
-  });
-
-  plMenu->addAction("Clear", this, [this]() {
-    m_playlist.clear();
-    m_page = 0;
-    updateLabels();
-  });
-
-  plMenu->addAction("Save", this, [this]() {
-    QString file = QFileDialog::getSaveFileName(
-        this, "Save Playlist", QString(), "Playlists (*.m3u)");
-    if (!file.isEmpty()) {
-      if (!file.endsWith(".m3u", Qt::CaseInsensitive)) file += ".m3u";
-      savePlaylist(file); // Writes both .m3u and .sel
-    }
-  });
-
-  plMenu->addAction("Edit", this, [this]() {
-    // Open your Playlist Editor QDialog here
-    openPlaylistEditor();
-  });
-
-  // 3. Select All / Deselect All
-  menu.addAction("Select All", this, [this]() {
-    for (int i = 0; i < m_playlist.size(); ++i) m_playlist[i].selected = true;
-    updateLabels();
-  });
-
-  menu.addAction("Deselect All", this, [this]() {
-    for (int i = 0; i < m_playlist.size(); ++i) m_playlist[i].selected = false;
-    updateLabels();
-  });
-
-  menu.addSeparator();
-  menu.addAction("exit", qApp, &QApplication::quit);
-
-  menu.exec(globalPos);
-*/
 }
 
 //-----------------------------------------------------------------------------------------
@@ -675,6 +542,8 @@ void SimboxMain::setupSelectionButtons()
 //-----------------------------------------------------------------------------------------
 void SimboxMain::setupLeds()
 {
+  m_ledSyncDelayMs = getWindowsAudioLatencyMs() +50; // audio delay in windows
+
  // 13 left LEDs: index 0 (green) starts at the center -> index 12 (red) at the outer-left edge
   m_leftLedCoords = {
     QPoint(190, 58), QPoint(184, 58), QPoint(178, 58), QPoint(172, 58),
@@ -866,7 +735,14 @@ void SimboxMain::loadPlaylistClicked()
 //-----------------------------------------------------------------------------------------
 void SimboxMain::clearPlaylistClicked()
 {
-
+  stopClicked();
+  playlist.clear();
+  m_playlist.clear();
+  m_currentSong = -1;
+  m_page = 0;
+  Label_Total->setText("00:00");
+  Label_Marquee->setText("Song Title");
+  updateLabels();
 }
 
 //-----------------------------------------------------------------------------------------
@@ -949,13 +825,21 @@ void SimboxMain::printData(QStringList dat) /** recieves playlist from editor */
 //-----------------------------------------------------------------------------------------
 void SimboxMain::selectAllClicked()
 {
-
+  for (int i = 0; i < m_playlist.size(); ++i)
+  {
+    m_playlist[i].selected = true;
+  }
+  updateLabels();
 }
 
 //-----------------------------------------------------------------------------------------
 void SimboxMain::deselectAllClicked()
 {
-
+  for (int i = 0; i < m_playlist.size(); ++i)
+  {
+    m_playlist[i].selected = false;
+  }
+  updateLabels();
 }
 
 //-----------------------------------------------------------------------------------------
@@ -978,6 +862,11 @@ controlPanel->setVisible(visible);
 //-----------------------------------------------------------------------------------------
 void SimboxMain::startPlayer(int index)
 {
+  m_player->stop();
+  m_peakQueue.clear();
+  m_rawPeakL = 0.0;
+  m_rawPeakR = 0.0;
+
   if (index < 0 || index >= m_playlist.size()) return;
 
   m_currentSong = index;
@@ -1098,12 +987,58 @@ void SimboxMain::onMarqueeTimer()
 }
 
 //-----------------------------------------------------------------------------------------
+void SimboxMain::paintEvent(QPaintEvent * /*event*/)
+{
+  QPainter painter(this);
+  painter.setRenderHint(QPainter::Antialiasing);
+
+  if (!m_skin.isNull())
+  {
+    painter.drawPixmap(0, 0, m_skin);
+    if (vuOffAction && !vuOffAction->isChecked() && m_leftLedCoords.size() == 13)
+    {
+      auto drawChannel = [&](const QVector<QPoint> &coords, const double alphas[13])
+      {
+        for (int i = 0; i < 13; ++i)
+        {
+          if (alphas[i] <= 0.0) continue;
+
+          QColor ledColor = (i < 4)  ? QColor(0, 255, 0) :     // 4 Green (inner)
+                            (i < 10) ? QColor(255, 255, 0) :   // 6 Yellow (middle)
+                                       QColor(255, 40, 40);    // 3 Red (outer peak)
+          ledColor.setAlphaF(alphas[i]);
+
+          QColor borderColor(0, 0, 0);
+          borderColor.setAlphaF(alphas[i]);
+
+          painter.setPen(QPen(borderColor, 1));
+          painter.setBrush(ledColor);
+          painter.drawRoundedRect(coords[i].x() - 2, coords[i].y() - 4, 5, 9, 2, 2);
+        }
+      };
+
+      drawChannel(m_leftLedCoords, m_leftLedAlpha);
+      drawChannel(m_rightLedCoords, m_rightLedAlpha);
+    }
+  }
+  else
+  {
+    // Fallback placeholder shape if skin PNG hasn't been added yet
+    painter.setBrush(QColor(40, 20, 20, 230));
+    painter.setPen(Qt::NoPen);
+    painter.drawRoundedRect(rect(), 40, 40);
+  }
+}
+
+//-----------------------------------------------------------------------------------------
 void SimboxMain::onAudioBufferProbed(const QAudioBuffer &buffer)
 {
-  if (!buffer.isValid() || buffer.format().channelCount() < 2) return;
+ if (!buffer.isValid() || buffer.format().channelCount() < 2) return;
 
   int frames = buffer.frameCount();
   int channels = buffer.format().channelCount();
+  double peakL = 0.0;
+  double peakR = 0.0;
 
   if (buffer.format().sampleType() == QAudioFormat::SignedInt && buffer.format().sampleSize() == 16)
   {
@@ -1112,8 +1047,19 @@ void SimboxMain::onAudioBufferProbed(const QAudioBuffer &buffer)
     {
       double l = qAbs(static_cast<double>(data[i * channels])) / 32768.0;
       double r = qAbs(static_cast<double>(data[i * channels + 1])) / 32768.0;
-      if (l > m_rawPeakL) m_rawPeakL = l;
-      if (r > m_rawPeakR) m_rawPeakR = r;
+      if (l > peakL) peakL = l;
+      if (r > peakR) peakR = r;
+    }
+  }
+  else if (buffer.format().sampleType() == QAudioFormat::SignedInt && buffer.format().sampleSize() == 32)
+  {
+    const qint32 *data = buffer.constData<qint32>();
+    for (int i = 0; i < frames; ++i)
+    {
+      double l = qAbs(static_cast<double>(data[i * channels])) / 2147483648.0;
+      double r = qAbs(static_cast<double>(data[i * channels + 1])) / 2147483648.0;
+      if (l > peakL) peakL = l;
+      if (r > peakR) peakR = r;
     }
   }
   else if (buffer.format().sampleType() == QAudioFormat::Float)
@@ -1123,34 +1069,127 @@ void SimboxMain::onAudioBufferProbed(const QAudioBuffer &buffer)
     {
       double l = qAbs(static_cast<double>(data[i * channels]));
       double r = qAbs(static_cast<double>(data[i * channels + 1]));
-      if (l > m_rawPeakL) m_rawPeakL = l;
-      if (r > m_rawPeakR) m_rawPeakR = r;
+      if (l > peakL) peakL = l;
+      if (r > peakR) peakR = r;
     }
+  }
+
+  if (m_ledSyncDelayMs <= 0)
+  {
+    // Linux: no extra audio driver delay—feed peaks straight to the timer
+    if (peakL > m_rawPeakL) m_rawPeakL = peakL;
+    if (peakR > m_rawPeakR) m_rawPeakR = peakR;
+  }
+  else
+  {
+    // Windows: delay peaks by m_ledSyncDelayMs to match hardware audio buffer
+    qint64 bufMs = m_player->position();
+    // Ignore stale position readings from the previous track during a track switch
+    if (!m_peakQueue.isEmpty() && bufMs + 1000 < m_peakQueue.last().timestampMs)
+    {
+      m_peakQueue.clear();
+    }
+    m_peakQueue.enqueue({bufMs, peakL, peakR});
   }
 }
 
 //-----------------------------------------------------------------------------------------
 void SimboxMain::onLedDecayTimer()
 {
-  // Instant attack when a louder peak arrives; smooth controlled falloff otherwise
-  if (m_rawPeakL >= m_leftAvg)
-    m_leftAvg = m_rawPeakL;
+  // 1. If paused or stopped, fade out smoothly just like your simple timer
+  if (m_player->state() != QMediaPlayer::PlayingState)
+  {
+    if (m_leftLevel > 0 || m_rightLevel > 0)
+    {
+      m_leftAvg *= 0.7;
+      m_rightAvg *= 0.7;
+      m_leftLevel = static_cast<int>(m_leftAvg * 14.0);
+      m_rightLevel = static_cast<int>(m_rightAvg * 14.0);
+      update();
+    }
+    return;
+  }
+
+  // Drop stale packets from a previous song or backward seek
+  qint64 currentPlayPos = m_player->position();
+  while (!m_peakQueue.isEmpty() &&
+         m_peakQueue.head().timestampMs > currentPlayPos + 1000)
+  {
+    m_peakQueue.dequeue();
+  }
+
+  // 2. Pop any queued audio peaks whose playback timestamp has reached the speakers
+  currentPlayPos = m_player->position();
+  double targetL = 0.0;
+  double targetR = 0.0;
+  bool hasPeak = false;
+  bool dotOnly = (vuDotAction && vuDotAction->isChecked());
+  bool anyLit = false;
+
+ if (m_ledSyncDelayMs <= 0)
+  {
+    if (m_rawPeakL > 0.0 || m_rawPeakR > 0.0)
+    {
+      targetL = m_rawPeakL;
+      targetR = m_rawPeakR;
+      m_rawPeakL = 0.0;
+      m_rawPeakR = 0.0;
+      hasPeak = true;
+    }
+  }
   else
-    m_leftAvg = (m_rawPeakL + m_leftAvg + m_leftAvg) / 3.0;
+  {
+    qint64 currentPlayPos = m_player->position();
+    while (!m_peakQueue.isEmpty() &&
+           (m_peakQueue.head().timestampMs + m_ledSyncDelayMs) <= currentPlayPos)
+    {
+      TimedPeak p = m_peakQueue.dequeue();
+      if (p.left > targetL)  targetL = p.left;
+      if (p.right > targetR) targetR = p.right;
+      hasPeak = true;
+    }
+  }
 
-  if (m_rawPeakR >= m_rightAvg)
-    m_rightAvg = m_rawPeakR;
+  while (!m_peakQueue.isEmpty() &&
+         (m_peakQueue.head().timestampMs + m_ledSyncDelayMs) <= currentPlayPos)
+  {
+    TimedPeak p = m_peakQueue.dequeue();
+    if (p.left > targetL)  targetL = p.left;
+    if (p.right > targetR) targetR = p.right;
+    hasPeak = true;
+  }
+
+  // 3. Smooth attack/decay (holds steady between audio chunks instead of dropping to 0)
+  if (hasPeak)
+  {
+    m_leftAvg  = (targetL >= m_leftAvg)  ? targetL : (targetL + m_leftAvg + m_leftAvg) / 3.0;
+    m_rightAvg = (targetR >= m_rightAvg) ? targetR : (targetR + m_rightAvg + m_rightAvg) / 3.0;
+  }
   else
-    m_rightAvg = (m_rawPeakR + m_rightAvg + m_rightAvg) / 3.0;
+  {
+    m_leftAvg  *= 0.90;
+    m_rightAvg *= 0.90;
+  }
 
-  // Reset raw peak accumulator for the next timer tick
-  m_rawPeakL = 0.0;
-  m_rawPeakR = 0.0;
+  int newLeft  = qBound(0, static_cast<int>(m_leftAvg * 14.0), 13);
+  int newRight = qBound(0, static_cast<int>(m_rightAvg * 14.0), 13);
 
-  int newLeft  = qBound(0, static_cast<int>(m_leftAvg * 15.0), 13);
-  int newRight = qBound(0, static_cast<int>(m_rightAvg * 15.0), 13);
+  for (int i = 0; i < 13; ++i)
+  {
+    bool isLitL = dotOnly ? (i == m_leftLevel - 1 && m_leftLevel > 0)   : (i < m_leftLevel);
+    bool isLitR = dotOnly ? (i == m_rightLevel - 1 && m_rightLevel > 0) : (i < m_rightLevel);
 
-  if (newLeft != m_leftLevel || newRight != m_rightLevel)
+    m_leftLedAlpha[i]  = isLitL ? 1.0 : (m_leftLedAlpha[i]  * m_ledFadeFactor);
+    m_rightLedAlpha[i] = isLitR ? 1.0 : (m_rightLedAlpha[i] * m_ledFadeFactor);
+
+    // Clamp tiny residual values to 0 so repaints stop once fully faded
+    if (m_leftLedAlpha[i]  < 0.03) m_leftLedAlpha[i]  = 0.0;
+    if (m_rightLedAlpha[i] < 0.03) m_rightLedAlpha[i] = 0.0;
+
+    if (m_leftLedAlpha[i] > 0.0 || m_rightLedAlpha[i] > 0.0) anyLit = true;
+  }
+
+  if (anyLit || newLeft != m_leftLevel || newRight != m_rightLevel)
   {
     m_leftLevel = newLeft;
     m_rightLevel = newRight;
