@@ -25,7 +25,6 @@
 #include <QDebug>
 
 
-#include "WinAudioLatency.h"
 #include "editform.h"
 #include "SimboxMain.h"
 
@@ -297,6 +296,11 @@ void SimboxMain::setupSongSlots()
     btn->setCursor(Qt::PointingHandCursor);
     btn->setText(QString("Track %1").arg(i + 1));
 
+    // Tag each card with its 0..19 slot index and route double-clicks to eventFilter
+    btn->setProperty("slotIndex", i);
+    btn->installEventFilter(this);
+    btn->setContextMenuPolicy(Qt::NoContextMenu);
+
     m_songSlots.append(btn);
     updateSlotStyle(i);
   }
@@ -542,7 +546,11 @@ void SimboxMain::setupSelectionButtons()
 //-----------------------------------------------------------------------------------------
 void SimboxMain::setupLeds()
 {
-  m_ledSyncDelayMs = getWindowsAudioLatencyMs() +50; // audio delay in windows
+#ifdef Q_OS_WIN
+  m_ledSyncDelayMs = 120; // audio delay in windows
+#else
+  m_ledSyncDelayMs = 0;
+#endif
 
  // 13 left LEDs: index 0 (green) starts at the center -> index 12 (red) at the outer-left edge
   m_leftLedCoords = {
@@ -875,6 +883,7 @@ void SimboxMain::startPlayer(int index)
 
   QString path = m_playlist[m_currentSong].filePath;
   QFileInfo info(path);
+qDebug() << "Double-clicked slot:" << index << "path:" << path;
 
   // Set up scrolling marquee text with padding spaces (just like original SongDisplay)
   m_marqueeText = "    " + info.completeBaseName() + "    ";
